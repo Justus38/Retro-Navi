@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../providers/navigation_providers.dart';
 import '../../providers/simulation_providers.dart';
 
 /// Bedienfeld der Simulation (nur sichtbar, wenn sie eingeschaltet ist).
@@ -15,6 +16,7 @@ class SimulationPanel extends ConsumerWidget {
     if (!sim.enabled) return const SizedBox.shrink();
 
     final ctrl = ref.read(simulationProvider.notifier);
+    final navActive = ref.watch(navigationProvider.select((n) => n.active));
     final theme = Theme.of(context);
 
     String? hint;
@@ -22,6 +24,8 @@ class SimulationPanel extends ConsumerWidget {
       hint = 'Kein Startpunkt: Karte lange drücken, um ihn zu setzen.';
     } else if (!sim.hasRoute) {
       hint = 'Ziel wählen und Route berechnen. Langer Druck auf die Karte setzt den Startpunkt.';
+    } else if (!navActive) {
+      hint = 'Play startet die Navigation. "Abweichen" testet die Neuberechnung und geht nur bei laufender Navigation.';
     }
 
     return Padding(
@@ -47,7 +51,18 @@ class SimulationPanel extends ConsumerWidget {
                   ),
                   IconButton.filled(
                     tooltip: sim.playing ? 'Pause' : 'Start',
-                    onPressed: sim.hasRoute ? (sim.playing ? ctrl.pause : ctrl.play) : null,
+                    onPressed: !sim.hasRoute
+                        ? null
+                        : () {
+                            if (sim.playing) {
+                              ctrl.pause();
+                            } else if (!navActive) {
+                              // Fahrt ohne Navigation ergibt keinen Sinn.
+                              ref.read(navigationProvider.notifier).start();
+                            } else {
+                              ctrl.play();
+                            }
+                          },
                     icon: Icon(sim.playing ? Icons.pause : Icons.play_arrow),
                   ),
                 ],
@@ -72,7 +87,7 @@ class SimulationPanel extends ConsumerWidget {
               Align(
                 alignment: Alignment.centerLeft,
                 child: OutlinedButton.icon(
-                  onPressed: sim.hasRoute ? ctrl.toggleOffRoute : null,
+                  onPressed: sim.hasRoute && navActive ? ctrl.toggleOffRoute : null,
                   icon: Icon(sim.offRoute ? Icons.undo : Icons.call_split),
                   label: Text(sim.offRoute ? 'Zurück auf die Route' : 'Abweichen (100 m)'),
                 ),

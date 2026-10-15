@@ -78,6 +78,11 @@ class NavigationCard extends ConsumerWidget {
                 _Metric('Tempo', '${nav.speedKmh.round()} km/h'),
               ],
             ),
+            const SizedBox(height: 4),
+            Text(
+              'Abstand zur Route: ${nav.offRouteM.round()} m  •  Neuberechnungen: ${nav.reroutes}',
+              style: theme.textTheme.bodySmall,
+            ),
             const SizedBox(height: 8),
             SizedBox(
               width: double.infinity,

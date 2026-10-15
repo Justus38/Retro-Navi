@@ -36,20 +36,34 @@ class GpsService {
   }
 
   /// Laufender Positionsstrom (~1 Hz).
-  Stream<GpsFix> positionStream() => Geolocator.getPositionStream(
-        locationSettings: _settings(),
+  ///
+  /// [background] = true: Android startet einen Vordergrunddienst mit
+  /// Benachrichtigung, iOS erlaubt Hintergrund-Updates. So laeuft die
+  /// Ortung auch bei gesperrtem Display weiter.
+  Stream<GpsFix> positionStream({bool background = false}) =>
+      Geolocator.getPositionStream(
+        locationSettings: _settings(background),
       ).map(GpsFix.fromPosition);
 
   Future<bool> openAppSettings() => Geolocator.openAppSettings();
   Future<bool> openLocationSettings() => Geolocator.openLocationSettings();
 
-  LocationSettings _settings() {
+  LocationSettings _settings(bool background) {
     switch (defaultTargetPlatform) {
       case TargetPlatform.android:
         return AndroidSettings(
           accuracy: LocationAccuracy.best,
           distanceFilter: 0,
           intervalDuration: const Duration(seconds: 1),
+          foregroundNotificationConfig: background
+              ? const ForegroundNotificationConfig(
+                  notificationTitle: 'Retro Navi',
+                  notificationText: 'Navigation läuft',
+                  notificationChannelName: 'Navigation',
+                  setOngoing: true,
+                  enableWakeLock: true,
+                )
+              : null,
         );
       case TargetPlatform.iOS:
         return AppleSettings(
@@ -57,6 +71,8 @@ class GpsService {
           activityType: ActivityType.automotiveNavigation,
           distanceFilter: 0,
           pauseLocationUpdatesAutomatically: false,
+          allowBackgroundLocationUpdates: background,
+          showBackgroundLocationIndicator: background,
         );
       default:
         return const LocationSettings(

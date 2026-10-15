@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:latlong2/latlong.dart';
 
@@ -5,6 +6,7 @@ import '../core/models/gps_fix.dart';
 import '../core/models/navigation_state.dart';
 import '../services/navigation/navigation_engine.dart';
 import 'geocoding_providers.dart';
+import 'gps_providers.dart';
 import 'position_providers.dart';
 import 'routing_providers.dart';
 import 'simulation_providers.dart';
@@ -16,6 +18,7 @@ class NavigationController extends Notifier<NavigationState> {
   NavigationEngine? _engine;
   DateTime? _lastReroute;
   bool _rerouting = false;
+  int _rerouteCount = 0;
 
   @override
   NavigationState build() {
@@ -54,7 +57,11 @@ class NavigationController extends Notifier<NavigationState> {
     _engine = NavigationEngine(route);
     _lastReroute = null;
     _rerouting = false;
+    _rerouteCount = 0;
     state = const NavigationState(active: true);
+    // Echte Fahrt: Ortung auch bei gesperrtem Display (Vordergrunddienst).
+    ref.read(backgroundTrackingProvider.notifier).state =
+        !ref.read(simulationProvider).enabled;
     // In der Simulation startet die Fahrt mit der Navigation.
     if (ref.read(simulationProvider).enabled) {
       ref.read(simulationProvider.notifier)
@@ -69,6 +76,7 @@ class NavigationController extends Notifier<NavigationState> {
     if (ref.read(simulationProvider).enabled) {
       ref.read(simulationProvider.notifier).pause();
     }
+    ref.read(backgroundTrackingProvider.notifier).state = false;
     _engine = null;
     _rerouting = false;
     state = const NavigationState();
@@ -79,7 +87,7 @@ class NavigationController extends Notifier<NavigationState> {
     if (engine == null) return;
 
     final s = engine.update(fix);
-    state = s.copyWith(rerouting: _rerouting);
+    state = s.copyWith(rerouting: _rerouting, reroutes: _rerouteCount);
     if (s.offRoute && !s.arrived && !_rerouting) _reroute(fix.latLng);
   }
 
@@ -91,11 +99,18 @@ class NavigationController extends Notifier<NavigationState> {
 
     _lastReroute = now;
     _rerouting = true;
+    debugPrint('[Reroute] Abweichung erkannt, berechne neu ab $from');
     state = state.copyWith(rerouting: true, clearError: true);
     try {
       await ref.read(routeProvider.notifier).reroute(from: from);
-      if (state.active) state = state.copyWith(rerouting: false, clearError: true);
+      _rerouteCount++;
+      debugPrint('[Reroute] neue Route uebernommen (#$_rerouteCount)');
+      if (state.active) {
+        state = state.copyWith(
+            rerouting: false, reroutes: _rerouteCount, clearError: true);
+      }
     } catch (e) {
+      debugPrint('[Reroute] fehlgeschlagen: $e');
       if (state.active) {
         state = state.copyWith(
           rerouting: false,

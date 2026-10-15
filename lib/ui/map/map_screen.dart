@@ -9,11 +9,14 @@ import '../../core/config/app_config.dart';
 import '../../core/models/gps_fix.dart';
 import '../../providers/geocoding_providers.dart';
 import '../../providers/gps_providers.dart';
+import '../../providers/keep_awake_provider.dart';
 import '../../providers/navigation_providers.dart';
+import '../../providers/output_providers.dart';
 import '../../providers/position_providers.dart';
 import '../../providers/routing_providers.dart';
 import '../../providers/simulation_providers.dart';
 import '../../services/gps/gps_service.dart';
+import '../debug/debug_panel.dart';
 import '../route/route_panel.dart';
 import '../search/destination_search_bar.dart';
 import '../simulation/simulation_panel.dart';
@@ -55,6 +58,8 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     final destination = ref.watch(destinationSearchProvider).destination;
     final route = ref.watch(routeProvider).valueOrNull;
     final navActive = ref.watch(navigationProvider.select((n) => n.active));
+    ref.watch(outputSchedulerProvider); // haelt den Sekundentakt am Laufen
+    ref.watch(keepAwakeProvider); // Display an waehrend der Navigation
 
     ref.listen<AsyncValue<GpsFix>>(positionStreamProvider, (_, next) {
       final f = next.valueOrNull;
@@ -67,6 +72,15 @@ class _MapScreenState extends ConsumerState<MapScreen> {
         setState(() => _follow = true);
         final f = ref.read(positionStreamProvider).valueOrNull;
         if (f != null) _controller.move(f.latLng, 17);
+      }
+    });
+
+    // Rueckmeldung, wenn die Route waehrend der Fahrt neu berechnet wurde.
+    ref.listen(navigationProvider.select((n) => n.reroutes), (prev, next) {
+      if (next > (prev ?? 0)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Route neu berechnet')),
+        );
       }
     });
 
@@ -192,15 +206,28 @@ class _MapScreenState extends ConsumerState<MapScreen> {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton(
-        tooltip: 'Auf Standort zentrieren',
-        onPressed: fix == null
-            ? null
-            : () {
-                setState(() => _follow = true);
-                _controller.move(fix.latLng, math.max(_controller.camera.zoom, 16));
-              },
-        child: Icon(_follow ? Icons.my_location : Icons.location_searching),
+      floatingActionButton: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          FloatingActionButton.small(
+            heroTag: 'debug',
+            tooltip: 'Debug-Ausgabe',
+            onPressed: () => showDebugPanel(context),
+            child: const Icon(Icons.terminal),
+          ),
+          const SizedBox(height: 12),
+          FloatingActionButton(
+            heroTag: 'locate',
+            tooltip: 'Auf Standort zentrieren',
+            onPressed: fix == null
+                ? null
+                : () {
+                    setState(() => _follow = true);
+                    _controller.move(fix.latLng, math.max(_controller.camera.zoom, 16));
+                  },
+            child: Icon(_follow ? Icons.my_location : Icons.location_searching),
+          ),
+        ],
       ),
     );
   }

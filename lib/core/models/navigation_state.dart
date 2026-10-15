@@ -18,6 +18,7 @@ class NavigationState {
     this.offRoute = false,
     this.arrived = false,
     this.rerouting = false,
+    this.reroutes = 0,
     this.error,
   });
 
@@ -48,11 +49,15 @@ class NavigationState {
   final bool offRoute;
   final bool arrived;
   final bool rerouting;
+
+  /// Anzahl erfolgreicher Neuberechnungen seit Navigationsstart.
+  final int reroutes;
   final String? error;
 
   NavigationState copyWith({
     bool? active,
     bool? rerouting,
+    int? reroutes,
     String? error,
     bool clearError = false,
   }) =>
@@ -71,6 +76,7 @@ class NavigationState {
         offRoute: offRoute,
         arrived: arrived,
         rerouting: rerouting ?? this.rerouting,
+        reroutes: reroutes ?? this.reroutes,
         error: clearError ? null : (error ?? this.error),
       );
 }
