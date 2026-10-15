@@ -10,9 +10,10 @@ final gpsPermissionProvider = FutureProvider<GpsPermissionStatus>(
   (ref) => ref.watch(gpsServiceProvider).ensurePermission(),
 );
 
-/// Echter GPS-Strom. Spaeter wird ein Provider darueber gelegt, der
-/// zwischen GPS und Simulation umschaltet.
-final positionStreamProvider = StreamProvider<GpsFix>((ref) async* {
+/// Echter GPS-Strom. Die App nutzt ihn nicht direkt, sondern ueber
+/// `positionStreamProvider` (position_providers.dart), der bei Bedarf auf
+/// die Simulation umschaltet.
+final gpsStreamProvider = StreamProvider<GpsFix>((ref) async* {
   final status = await ref.watch(gpsPermissionProvider.future);
   if (status != GpsPermissionStatus.granted) return;
   yield* ref.watch(gpsServiceProvider).positionStream();

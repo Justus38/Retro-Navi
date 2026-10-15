@@ -9,8 +9,14 @@ import '../../core/config/app_config.dart';
 import '../../core/models/gps_fix.dart';
 import '../../providers/geocoding_providers.dart';
 import '../../providers/gps_providers.dart';
+import '../../providers/navigation_providers.dart';
+import '../../providers/position_providers.dart';
+import '../../providers/routing_providers.dart';
+import '../../providers/simulation_providers.dart';
 import '../../services/gps/gps_service.dart';
+import '../route/route_panel.dart';
 import '../search/destination_search_bar.dart';
+import '../simulation/simulation_panel.dart';
 
 class MapScreen extends ConsumerStatefulWidget {
   const MapScreen({super.key});
@@ -47,10 +53,37 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     final position = ref.watch(positionStreamProvider);
     final fix = position.valueOrNull;
     final destination = ref.watch(destinationSearchProvider).destination;
+    final route = ref.watch(routeProvider).valueOrNull;
+    final navActive = ref.watch(navigationProvider.select((n) => n.active));
 
     ref.listen<AsyncValue<GpsFix>>(positionStreamProvider, (_, next) {
       final f = next.valueOrNull;
       if (f != null) _onFix(f);
+    });
+
+    // Navigation gestartet -> Folgemodus an, nah heranzoomen.
+    ref.listen(navigationProvider.select((n) => n.active), (prev, next) {
+      if (next && prev != true) {
+        setState(() => _follow = true);
+        final f = ref.read(positionStreamProvider).valueOrNull;
+        if (f != null) _controller.move(f.latLng, 17);
+      }
+    });
+
+    // Neue Route -> Kamera auf die ganze Strecke (nicht waehrend der Fahrt).
+    ref.listen(routeProvider.select((r) => r.valueOrNull), (prev, next) {
+      if (next != null &&
+          next != prev &&
+          next.points.length > 1 &&
+          !ref.read(navigationProvider).active) {
+        setState(() => _follow = false);
+        _controller.fitCamera(
+          CameraFit.bounds(
+            bounds: LatLngBounds.fromPoints(next.points),
+            padding: const EdgeInsets.fromLTRB(40, 200, 40, 160),
+          ),
+        );
+      }
     });
 
     // Neues Ziel gewaehlt -> Kamera dorthin, Folgemodus aus.
@@ -70,6 +103,18 @@ class _MapScreenState extends ConsumerState<MapScreen> {
             options: MapOptions(
               initialCenter: _fallbackCenter,
               initialZoom: 7,
+              // Simulation: Langdruck setzt den virtuellen Startpunkt.
+              onLongPress: (_, point) {
+                if (!ref.read(simulationProvider).enabled ||
+                    ref.read(navigationProvider).active) {
+                  return;
+                }
+                ref.read(routeProvider.notifier).clear();
+                ref.read(simulationProvider.notifier).setStart(point);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Startpunkt gesetzt')),
+                );
+              },
               onPositionChanged: (_, hasGesture) {
                 // Manuelles Verschieben beendet den Folgemodus.
                 if (hasGesture && _follow) setState(() => _follow = false);
@@ -81,6 +126,18 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                 userAgentPackageName: 'com.example.retro_navi',
                 maxNativeZoom: 19,
               ),
+              if (route != null)
+                PolylineLayer(
+                  polylines: [
+                    Polyline(
+                      points: route.points,
+                      strokeWidth: 6,
+                      color: Theme.of(context).colorScheme.primary,
+                      borderStrokeWidth: 2,
+                      borderColor: Colors.white,
+                    ),
+                  ],
+                ),
               if (fix != null)
                 MarkerLayer(
                   markers: [
@@ -115,16 +172,23 @@ class _MapScreenState extends ConsumerState<MapScreen> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const DestinationSearchBar(),
-                  const SizedBox(height: 8),
+                  if (!navActive) ...[
+                    const DestinationSearchBar(),
+                    const SizedBox(height: 8),
+                  ],
                   _StatusCard(
                     permission: permission,
                     position: position,
                     config: config,
                   ),
+                  const SimulationPanel(),
                 ],
               ),
             ),
+          ),
+          const Align(
+            alignment: Alignment.bottomCenter,
+            child: RoutePanel(),
           ),
         ],
       ),
@@ -184,8 +248,18 @@ class _StatusCard extends ConsumerWidget {
 
     Widget content;
     final status = permission.valueOrNull;
+    final simOn = ref.watch(simulationProvider.select((s) => s.enabled));
 
-    if (permission.isLoading) {
+    if (simOn) {
+      final fix = position.valueOrNull;
+      content = fix == null
+          ? const _Line(Icons.science, 'Simulation: noch kein Startpunkt')
+          : _Line(
+              Icons.science,
+              'SIM  ${fix.speedKmh.toStringAsFixed(0)} km/h   '
+              '${fix.lat.toStringAsFixed(5)}, ${fix.lng.toStringAsFixed(5)}',
+            );
+    } else if (permission.isLoading) {
       content = const _Line(Icons.hourglass_empty, 'Pruefe Standortfreigabe ...');
     } else if (status == GpsPermissionStatus.serviceDisabled) {
       content = _Line(Icons.location_disabled, 'Ortungsdienste sind aus.',
@@ -220,6 +294,17 @@ class _StatusCard extends ConsumerWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             content,
+            Row(
+              children: [
+                const Icon(Icons.science_outlined, size: 18),
+                const SizedBox(width: 8),
+                const Expanded(child: Text('Simulation')),
+                Switch(
+                  value: simOn,
+                  onChanged: ref.read(simulationProvider.notifier).setEnabled,
+                ),
+              ],
+            ),
             if (!config.hasOrsKey)
               const Padding(
                 padding: EdgeInsets.only(top: 6),

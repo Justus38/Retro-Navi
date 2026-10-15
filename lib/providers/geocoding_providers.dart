@@ -8,7 +8,7 @@ import '../core/models/place.dart';
 import '../services/geocoding/geocoding_service.dart';
 import '../services/geocoding/nominatim_geocoding_service.dart';
 import '../services/geocoding/ors_geocoding_service.dart';
-import 'gps_providers.dart';
+import 'position_providers.dart';
 
 final httpClientProvider = Provider<http.Client>((ref) {
   final client = http.Client();
