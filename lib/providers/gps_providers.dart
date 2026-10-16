@@ -14,12 +14,6 @@ final gpsPermissionProvider = FutureProvider<GpsPermissionStatus>(
 /// ein (Vordergrunddienst auf Android).
 final backgroundTrackingProvider = StateProvider<bool>((ref) => false);
 
-/// Echter GPS-Strom. Die App nutzt ihn nicht direkt, sondern ueber
-/// `positionStreamProvider` (position_providers.dart), der bei Bedarf auf
-/// die Simulation umschaltet.
-final gpsStreamProvider = StreamProvider<GpsFix>((ref) async* {
-  final background = ref.watch(backgroundTrackingProvider);
-  final status = await ref.watch(gpsPermissionProvider.future);
-  if (status != GpsPermissionStatus.granted) return;
-  yield* ref.watch(gpsServiceProvider).positionStream(background: background);
-});
+/// Letzter echter GPS-Fix (wird von der Positionsquelle gepflegt). Die
+/// Simulation nutzt ihn als Startpunkt.
+final lastRealFixProvider = StateProvider<GpsFix?>((ref) => null);

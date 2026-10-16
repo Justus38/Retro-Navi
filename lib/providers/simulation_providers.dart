@@ -55,7 +55,7 @@ class SimulationController extends Notifier<SimulationState> {
     if (on == state.enabled) return;
     if (on) {
       // Ohne Route am letzten echten GPS-Punkt "parken" (falls vorhanden).
-      final real = ref.read(gpsStreamProvider).valueOrNull;
+      final real = ref.read(lastRealFixProvider);
       if (!_s.hasRoute && real != null) {
         _s.parkAt(real.latLng, heading: real.hasHeading ? real.heading : 0);
       }
