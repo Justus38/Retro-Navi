@@ -7,6 +7,7 @@ import 'package:latlong2/latlong.dart';
 
 import '../../core/config/app_config.dart';
 import '../../core/models/gps_fix.dart';
+import '../../providers/ble_providers.dart';
 import '../../providers/geocoding_providers.dart';
 import '../../providers/gps_providers.dart';
 import '../../providers/keep_awake_provider.dart';
@@ -16,6 +17,7 @@ import '../../providers/position_providers.dart';
 import '../../providers/routing_providers.dart';
 import '../../providers/simulation_providers.dart';
 import '../../services/gps/gps_service.dart';
+import '../ble/ble_panel.dart';
 import '../debug/debug_panel.dart';
 import '../route/route_panel.dart';
 import '../search/destination_search_bar.dart';
@@ -60,6 +62,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     final navActive = ref.watch(navigationProvider.select((n) => n.active));
     ref.watch(outputSchedulerProvider); // haelt den Sekundentakt am Laufen
     ref.watch(keepAwakeProvider); // Display an waehrend der Navigation
+    ref.watch(bleAutoConnectProvider); // mit gemerktem ESP32 verbinden
 
     ref.listen<AsyncValue<GpsFix>>(positionStreamProvider, (_, next) {
       final f = next.valueOrNull;
@@ -209,6 +212,8 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       floatingActionButton: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          const BleStatusButton(),
+          const SizedBox(height: 12),
           FloatingActionButton.small(
             heroTag: 'debug',
             tooltip: 'Debug-Ausgabe',

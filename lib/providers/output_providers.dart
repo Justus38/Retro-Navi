@@ -1,9 +1,11 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../services/encoder/esp32_encoder.dart';
+import '../services/output/ble_output.dart';
 import '../services/output/debug_output.dart';
 import '../services/output/output_channel.dart';
 import '../services/output/output_scheduler.dart';
+import 'ble_providers.dart';
 import 'navigation_providers.dart';
 
 // ---------------------------------------------------------------- Debug-Log
@@ -60,11 +62,11 @@ final debugLogProvider =
 
 final esp32EncoderProvider = Provider<Esp32Encoder>((ref) => const Esp32Encoder());
 
-/// DER Ausgabekanal der App. Spaeter hier die BleOutput-Klasse einhaengen,
-/// z. B. `MultiOutput([debug, ble])`; sonst muss nichts geaendert werden.
+/// DER Ausgabekanal der App: Debug-Log und Bluetooth parallel.
 final outputChannelProvider = Provider<OutputChannel>((ref) {
   final debug = DebugOutput(ref.read(debugLogProvider.notifier).add);
-  return MultiOutput([debug]);
+  final ble = BleOutput(ref.watch(bleServiceProvider));
+  return MultiOutput([debug, ble]);
 });
 
 /// Sekundentakt. Muss irgendwo beobachtet werden (MapScreen), damit er laeuft.
