@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:retro_navi/core/models/nav_route.dart';
 import 'package:retro_navi/core/models/navigation_state.dart';
 import 'package:retro_navi/services/encoder/esp32_encoder.dart';
+import 'package:retro_navi/services/mapview/map_models.dart';
 
 NavigationState _state({
   double speedKmh = 47.2,
@@ -110,5 +111,54 @@ void main() {
       remS: 99999 * 60,
     ));
     expect(utf8.encode(json).length, lessThan(110));
+  });
+
+  test('mit Pose kommen m, x, y, h, z, i dazu (ganze Meter ohne ".0")', () {
+    const pose = MapPose(
+      chunkId: 3,
+      x: 12.34,
+      y: -45.0,
+      headingDeg: 87,
+      zoomM: 240,
+      nextIndex: 14,
+    );
+    final json = enc.encode(_state(), pose: pose);
+    expect(
+      json,
+      '{"spd":47,"turn":"L","dist":320,"street":"Hauptstr","rem":12400,"eta":18,'
+      '"m":3,"x":12.3,"y":-45,"h":87,"z":240,"i":14}',
+    );
+  });
+
+  test('Nachricht mit Pose bleibt im Extremfall unter 170 Bytes', () {
+    const pose = MapPose(
+      chunkId: 9999,
+      x: -2599.9,
+      y: -2599.9,
+      headingDeg: 359,
+      zoomM: 900,
+      nextIndex: 127,
+    );
+    final json = enc.encode(
+      _state(
+        speedKmh: 250,
+        turn: TurnType.enterRoundabout,
+        exit: 4,
+        dist: 99999,
+        street: 'Bürgermeister-Ulrich-Straße',
+        remM: 999999,
+        remS: 99999 * 60,
+      ),
+      pose: pose,
+    );
+    expect(utf8.encode(json).length, lessThan(170));
+  });
+
+  test('Kartenstueck: kompaktes JSON', () {
+    const chunk = MapChunk(id: 3, route: [0, -150, 0, 300, 120, 400], routeEnd: false);
+    expect(enc.encodeMapChunk(chunk),
+        '{"t":"map","id":3,"e":0,"r":[0,-150,0,300,120,400]}');
+    const last = MapChunk(id: 4, route: [0, 0, 5, 5], routeEnd: true);
+    expect(enc.encodeMapChunk(last), contains('"e":1'));
   });
 }

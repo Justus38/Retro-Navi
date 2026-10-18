@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../providers/ble_providers.dart';
+import '../../providers/output_providers.dart';
 import '../../services/ble/ble_models.dart';
 
 void showBlePanel(BuildContext context) {
@@ -105,7 +106,27 @@ class _BlePanelState extends ConsumerState<BlePanel> {
               padding: const EdgeInsets.only(top: 8),
               child: Text(message, style: TextStyle(color: theme.colorScheme.error)),
             ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 4),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Kartenansicht auf dem Display'),
+            subtitle: const Text(
+                'Aus: nur Abbiegepfeil. Braucht den aktuellen ESP32-Sketch.'),
+            value: ref.watch(mapViewEnabledProvider),
+            onChanged: (v) => ref.read(mapViewEnabledProvider.notifier).state = v,
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Nebenstraßen anzeigen'),
+            subtitle: const Text(
+                'Braucht Internet (Kartendaten von OpenFreeMap, © OpenMapTiles, '
+                'Daten von OpenStreetMap).'),
+            value: ref.watch(sideRoadsEnabledProvider),
+            onChanged: ref.watch(mapViewEnabledProvider)
+                ? (v) => ref.read(sideRoadsEnabledProvider.notifier).state = v
+                : null,
+          ),
+          const SizedBox(height: 8),
           Wrap(
             spacing: 8,
             runSpacing: 8,

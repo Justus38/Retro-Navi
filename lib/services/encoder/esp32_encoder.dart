@@ -3,6 +3,8 @@ import 'dart:math' as math;
 
 import '../../core/models/nav_route.dart';
 import '../../core/models/navigation_state.dart';
+import '../mapview/map_models.dart';
+import '../mapview/roads/road_models.dart';
 
 /// Wandelt den [NavigationState] in das kompakte JSON fuer den ESP32:
 /// {"spd":47,"turn":"L","dist":320,"street":"Hauptstr","rem":12400,"eta":18}
@@ -19,15 +21,99 @@ class Esp32Encoder {
   /// Maximale Laenge des Strassennamens (Zeichen, nur ASCII).
   final int maxStreetLength;
 
-  String encode(NavigationState s) {
-    return jsonEncode(<String, Object>{
+  /// Mit [pose] kommen sechs Felder dazu (Kartenansicht); ohne bleibt die
+  /// Nachricht exakt wie in Phase 1.
+  ///   m  Kennung des Chunks, zu dem x/y gehoeren
+  ///   x  Meter nach Osten, y Meter nach Norden (im Chunk-System)
+  ///   h  Fahrtrichtung in Grad (0 = Norden)
+  ///   z  Sichtweite nach vorn in Metern
+  ///   i  Index des ersten Chunk-Punkts vor dem Fahrzeug
+  String encode(NavigationState s, {MapPose? pose}) {
+    final m = <String, Object>{
       'spd': _int(s.speedKmh, max: 999),
       'turn': turnCode(s.turn, exitNumber: s.exitNumber),
       'dist': _int(s.distToTurnM),
       'street': sanitizeStreet(s.street),
       'rem': _int(s.remainingM),
       'eta': _int(s.remainingS > 0 ? (s.remainingS / 60).ceilToDouble() : 0),
-    });
+    };
+    if (pose != null) {
+      m['m'] = pose.chunkId;
+      m['x'] = _meters(pose.x);
+      m['y'] = _meters(pose.y);
+      m['h'] = pose.headingDeg;
+      m['z'] = pose.zoomM;
+      m['i'] = pose.nextIndex;
+    }
+    return jsonEncode(m);
+  }
+
+  /// Kartenstueck fuer den ESP32:
+  /// {"t":"map","id":3,"e":0,"r":[x0,y0,x1,y1,...]}
+  ///   id  Kennung, e = 1 wenn der letzte Punkt das Ziel ist,
+  ///   r   Streckenpunkte in ganzen Metern (x Ost, y Nord).
+  ///   fr  Kennung des Koordinatensystems (nur wenn Nebenstrassen moeglich sind)
+  String encodeMapChunk(MapChunk c) => jsonEncode(<String, Object>{
+        't': 'map',
+        'id': c.id,
+        if (c.frameId > 0) 'fr': c.frameId,
+        'e': c.routeEnd ? 1 : 0,
+        'r': c.route,
+      });
+
+  /// Nebenstrassen als Folge kleiner Nachrichten (jede passt in einen
+  /// BLE-Zeilenpuffer des ESP32):
+  /// {"t":"rd","fr":2,"g":5,"n":0,"f":0,"l":[[1,x0,y0,dx1,dy1,...],...]}
+  ///   fr  Koordinatensystem (muss zum Chunk passen)
+  ///   g   Ausgabe-Nummer; n = laufende Nummer des Teils (ab 0)
+  ///   f   1 = letzter Teil, dann schaltet der ESP32 auf die neuen Strassen um
+  ///   l   Abschnitte: Klasse (1 Neben, 2 Haupt), erster Punkt absolut,
+  ///       danach nur Unterschiede zum Vorgaenger (ganze Meter)
+  /// Eine leere Liste mit f=1 loescht die Strassen.
+  List<String> encodeRoadParts(
+    List<RoadRun> runs, {
+    required int frameId,
+    required int generation,
+    int maxChars = 1000,
+  }) {
+    final parts = <String>[];
+    var current = <List<int>>[];
+    var size = 0;
+
+    void emit(bool last) {
+      parts.add(jsonEncode(<String, Object>{
+        't': 'rd',
+        'fr': frameId,
+        'g': generation,
+        'n': parts.length,
+        'f': last ? 1 : 0,
+        'l': current,
+      }));
+      current = <List<int>>[];
+      size = 0;
+    }
+
+    for (final r in runs) {
+      final row = <int>[r.cls, r.pts[0], r.pts[1]];
+      for (var i = 2; i < r.pts.length; i += 2) {
+        row
+          ..add(r.pts[i] - r.pts[i - 2])
+          ..add(r.pts[i + 1] - r.pts[i - 1]);
+      }
+      final cost = jsonEncode(row).length + 1;
+      if (current.isNotEmpty && size + cost > maxChars) emit(false);
+      current.add(row);
+      size += cost;
+    }
+    emit(true);
+    return parts;
+  }
+
+  /// Meter mit hoechstens einer Nachkommastelle; ganze Werte ohne ".0".
+  static num _meters(double v) {
+    if (!v.isFinite) return 0;
+    final r = (v * 10).round() / 10;
+    return r == r.roundToDouble() ? r.round() : r;
   }
 
   /// Abbiegecode fuer das Display.
