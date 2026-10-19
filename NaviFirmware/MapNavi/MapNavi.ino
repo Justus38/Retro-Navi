@@ -36,8 +36,12 @@
     - Board-Paket "esp32" von Espressif (BLE ist darin enthalten)
 
   Arduino-IDE-Einstellungen:
-    Board: "ESP32 Dev Module"
-    Partition Scheme: "Huge APP (3MB No OTA/1MB SPIFFS)"
+    ESP32 klassisch:  Board "ESP32 Dev Module",
+                      Partition Scheme "Huge APP (3MB No OTA/1MB SPIFFS)"
+    XIAO ESP32S3:     Board "XIAO_ESP32S3",
+                      USB CDC On Boot: "Enabled" (sonst kein Serieller Monitor),
+                      PSRAM: "Disabled" (der Kartenpuffer soll im schnellen internen RAM liegen),
+                      Partition Scheme: eines mit mindestens 3 MB App, z. B. "8M with spiffs (3MB APP/1.5MB SPIFFS)"
 
   Speicher: Die Karte wird in einem Puffer im RAM (320x240, 1 Byte/Pixel =
   ca. 77 kB) gezeichnet und auf einmal an das Display geschickt (kein
@@ -65,8 +69,19 @@
 #include <ArduinoJson.h>
 
 // ---------------------------------------------------------------- Hardware
-// Pins wie in deinem Display-Testskript. Beim ESP32-S3 muessen sie angepasst
-// werden (dort sind nicht alle dieser GPIOs frei).
+// Pins: automatisch passend zum gewaehlten Board.
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+// Seeed XIAO ESP32S3 (Beschriftung auf der Platine in Klammern):
+#define TFT_SCK 7          // D8
+#define TFT_MISO 8         // D9  (nur angeschlossen, der Sketch liest nichts vom Display)
+#define TFT_MOSI 9         // D10
+#define TFT_DC 4           // D3
+#define TFT_CS 5           // D4
+#define TFT_RESET 6        // D5
+#define TFT_LED 1          // D0 - Hintergrundbeleuchtung (PWM)
+#define BACKLIGHT_PIN TFT_LED
+#else
+// Klassischer ESP32 (Pins wie in deinem Display-Testskript):
 #define TFT_MISO 25
 #define TFT_LED 5          // in deinem Skript definiert, hier ungenutzt
 #define TFT_SCK 19
@@ -75,6 +90,7 @@
 #define TFT_RESET 18
 #define TFT_CS 22
 #define BACKLIGHT_PIN 16   // wie in deinem Skript (PWM)
+#endif
 #define BACKLIGHT_LEVEL 5  // 0-255, wie in deinem Skript; hoeher = heller
 #define TFT_SPI_HZ 27000000
 
