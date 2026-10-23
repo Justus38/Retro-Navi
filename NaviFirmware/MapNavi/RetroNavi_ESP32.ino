@@ -676,39 +676,50 @@ static char mediaLine[512];
 static size_t mediaLen = 0;
 static bool mediaOverflow = false;
 
-// UTF-8 -> reines ASCII (die Schrift kennt nur ASCII): Umlaute und Akzente
-// werden umgeschrieben, Unbekanntes faellt weg.
+// UTF-8 -> Zeichensatz der Display-Schrift (CP437). Die eingebaute Schrift kennt
+// Umlaute und viele Akzente (ä ö ü Ä Ö Ü ß é è à ...). Was sie nicht kennt, wird
+// durch den Grundbuchstaben ersetzt, anderes faellt weg.
+// MEDIA_UMLAUTS 0 = alles in ASCII umschreiben (ä -> ae), falls Zeichen falsch aussehen.
+#define MEDIA_UMLAUTS 1
+struct Latin1Map {
+  uint8_t d;        // zweites UTF-8-Byte nach 0xC3
+  uint8_t cp;       // Zeichen in der Schrift (0 = keins)
+  const char* alt;  // Ersatz in ASCII
+};
+static const Latin1Map LATIN1[] = {
+  {0x80, 0, "A"}, {0x81, 0, "A"}, {0x82, 0, "A"}, {0x83, 0, "A"}, {0x84, 0x8E, "Ae"},
+  {0x85, 0x8F, "A"}, {0x86, 0x92, "AE"}, {0x87, 0x80, "C"}, {0x88, 0, "E"}, {0x89, 0x90, "E"},
+  {0x8A, 0, "E"}, {0x8B, 0, "E"}, {0x8C, 0, "I"}, {0x8D, 0, "I"}, {0x8E, 0, "I"}, {0x8F, 0, "I"},
+  {0x91, 0xA5, "N"}, {0x92, 0, "O"}, {0x93, 0, "O"}, {0x94, 0, "O"}, {0x95, 0, "O"},
+  {0x96, 0x99, "Oe"}, {0x98, 0, "O"}, {0x99, 0, "U"}, {0x9A, 0, "U"}, {0x9B, 0, "U"},
+  {0x9C, 0x9A, "Ue"}, {0x9F, 0xE1, "ss"},
+  {0xA0, 0x85, "a"}, {0xA1, 0xA0, "a"}, {0xA2, 0x83, "a"}, {0xA3, 0, "a"}, {0xA4, 0x84, "ae"},
+  {0xA5, 0x86, "a"}, {0xA6, 0x91, "ae"}, {0xA7, 0x87, "c"}, {0xA8, 0x8A, "e"}, {0xA9, 0x82, "e"},
+  {0xAA, 0x88, "e"}, {0xAB, 0x89, "e"}, {0xAC, 0x8D, "i"}, {0xAD, 0xA1, "i"}, {0xAE, 0x8C, "i"},
+  {0xAF, 0x8B, "i"}, {0xB1, 0xA4, "n"}, {0xB2, 0x95, "o"}, {0xB3, 0xA2, "o"}, {0xB4, 0x93, "o"},
+  {0xB5, 0, "o"}, {0xB6, 0x94, "oe"}, {0xB8, 0, "o"}, {0xB9, 0x97, "u"}, {0xBA, 0xA3, "u"},
+  {0xBB, 0x96, "u"}, {0xBC, 0x81, "ue"}, {0xBF, 0x98, "y"},
+};
+
 static void asciiize(const char* in, char* out, size_t outSize) {
   size_t o = 0;
+  auto putc_ = [&](char c) {
+    if (o + 1 < outSize) out[o++] = c;
+  };
   auto put = [&](const char* t) {
-    while (*t && o + 1 < outSize) out[o++] = *t++;
+    while (*t) putc_(*t++);
   };
   for (const uint8_t* p = (const uint8_t*)in; *p; p++) {
     uint8_t c = *p;
     if (c >= 0x20 && c < 0x7F) {
-      if (o + 1 < outSize) out[o++] = (char)c;
+      putc_((char)c);
     } else if (c == 0xC3 && p[1]) {
       uint8_t d = *++p;
-      switch (d) {
-        case 0x84: put("Ae"); break;
-        case 0x96: put("Oe"); break;
-        case 0x9C: put("Ue"); break;
-        case 0xA4: put("ae"); break;
-        case 0xB6: put("oe"); break;
-        case 0xBC: put("ue"); break;
-        case 0x9F: put("ss"); break;
-        case 0xA0: case 0xA1: case 0xA2: case 0xA3: case 0xA5: put("a"); break;
-        case 0xA7: put("c"); break;
-        case 0xA8: case 0xA9: case 0xAA: case 0xAB: put("e"); break;
-        case 0xAC: case 0xAD: case 0xAE: case 0xAF: put("i"); break;
-        case 0xB1: put("n"); break;
-        case 0xB2: case 0xB3: case 0xB4: case 0xB5: case 0xB8: put("o"); break;
-        case 0xB9: case 0xBA: case 0xBB: put("u"); break;
-        case 0x80: case 0x81: case 0x82: case 0x83: case 0x85: put("A"); break;
-        case 0x87: put("C"); break;
-        case 0x88: case 0x89: case 0x8A: case 0x8B: put("E"); break;
-        case 0x92: case 0x93: case 0x94: case 0x95: put("O"); break;
-        default: break;
+      for (const Latin1Map& m : LATIN1) {
+        if (m.d != d) continue;
+        if (MEDIA_UMLAUTS && m.cp) putc_((char)m.cp);
+        else put(m.alt);
+        break;
       }
     } else if (c == 0xE2 && p[1] == 0x80 && p[2]) {
       uint8_t d = p[2];
@@ -1338,6 +1349,7 @@ void setup() {
   MEDIA_SERIAL.setRxBufferSize(1024);  // Zeilen bis ~300 Byte, waehrend das Display zeichnet
   MEDIA_SERIAL.begin(MEDIA_BAUD, SERIAL_8N1, MEDIA_RX_PIN, MEDIA_TX_PIN);
 
+  if (canvas) canvas->cp437(true);  // Schrift: Umlaute/Akzente richtig adressieren
   lastPose.valid = false;
   resetShown();
   startBle();
