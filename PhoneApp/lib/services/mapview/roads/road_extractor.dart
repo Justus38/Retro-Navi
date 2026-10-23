@@ -10,8 +10,10 @@ import 'tile_math.dart';
 /// Macht aus Vektorkacheln die Strassen neben der Route.
 ///
 /// - Nur Strassen innerhalb von [corridorM] Metern um den Routenabschnitt.
-/// - Punkte näher als [onRouteM] an der Route entfallen: die Route selbst
-///   wird ohnehin gezeichnet, so gibt es keine doppelten Linien.
+/// - Strassen, die ueber die Route hinweg- oder an ihr beginnen, laufen bis
+///   an die Route (keine Luecke). Nur Stuecke, die auf der Route selbst
+///   liegen (naeher als [onRouteM]), werden bis auf einen Anschlusspunkt
+///   gekuerzt; liegt eine ganze Strasse dort, entfaellt sie.
 /// - Linien werden vereinfacht, zu kurze Stuecke verworfen und die Gesamt-
 ///   zahl der Punkte begrenzt (Hauptstrassen und Naehe zum Fahrzeug zuerst).
 class RoadExtractor {
@@ -119,18 +121,21 @@ class RoadExtractor {
   ) {
     var runX = <double>[];
     var runY = <double>[];
+    var runD = <double>[];
 
     void flush() {
-      if (runX.length >= 2) _finishRun(cls, runX, runY, vx, vy, out);
+      if (runX.length >= 2) _finishRun(cls, runX, runY, runD, vx, vy, out);
       runX = <double>[];
       runY = <double>[];
+      runD = <double>[];
     }
 
     void visit(double x, double y) {
       final d = _distToPolyline(x, y, rx, ry);
-      if (d > onRouteM && d <= corridorM) {
+      if (d <= corridorM) {
         runX.add(x);
         runY.add(y);
+        runD.add(d);
       } else {
         flush();
       }
@@ -149,8 +154,19 @@ class RoadExtractor {
     flush();
   }
 
-  void _finishRun(int cls, List<double> xs, List<double> ys, double vx, double vy,
-      List<_Found> out) {
+  void _finishRun(int cls, List<double> xs0, List<double> ys0, List<double> ds, double vx,
+      double vy, List<_Found> out) {
+    // Anfang und Ende, die auf der Route liegen, bis auf einen Punkt kuerzen
+    // (der bleibt als Anschluss an die Route). Liegt alles auf der Route: weg.
+    var first = ds.indexWhere((d) => d > onRouteM);
+    if (first < 0) return;
+    var last = ds.lastIndexWhere((d) => d > onRouteM);
+    first = first > 0 ? first - 1 : 0;
+    last = last < ds.length - 1 ? last + 1 : ds.length - 1;
+    final xs = xs0.sublist(first, last + 1);
+    final ys = ys0.sublist(first, last + 1);
+    if (xs.length < 2) return;
+
     final idx = douglasPeucker(xs, ys, simplifyM);
     // Ganze Meter, direkte Doppelpunkte entfernen.
     final pts = <int>[];

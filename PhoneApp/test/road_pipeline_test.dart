@@ -96,32 +96,57 @@ void main() {
       vehicleY: 0,
     );
 
-    test('Hauptstrassen zuerst, Quer- und Seitenstrasse gefunden', () {
-      expect(runs.map((r) => r.cls), [2, 2, 1]);
+    test('Hauptstrasse zuerst, dann die Seitenstrasse; Strasse auf der Route entfaellt', () {
+      expect(runs.map((r) => r.cls), [2, 1]);
     });
 
-    test('Hauptstrasse wird an der Route geteilt (Luecke ~8 m)', () {
-      final west = runs.firstWhere((r) => r.pts.first < 0 && r.cls == 2);
-      final east = runs.firstWhere((r) => r.pts.first > 0 && r.cls == 2);
-      expect(west.pts.last, lessThanOrEqualTo(-5));
-      expect(west.pts.last, greaterThanOrEqualTo(-40));
-      expect(east.pts.first, greaterThanOrEqualTo(5));
-      expect(east.pts.first, lessThanOrEqualTo(40));
-      // y ca. -100 (Rundung, Massstab)
-      expect(east.pts[1], closeTo(-100, 3));
+    test('Querende Hauptstrasse laeuft ohne Luecke ueber die Route', () {
+      final main = runs.first;
+      // ein einziger Linienzug von weit links bis weit rechts, y ca. -100
+      expect(main.pts.first, lessThan(-200));
+      expect(main.pts[main.pts.length - 2], greaterThan(200));
+      expect(main.pts[1], closeTo(-100, 3));
+      expect(main.pointCount, 2); // gerade Linie
     });
 
-    test('Nebenstrasse beginnt an der Route und endet am Korridorrand', () {
+    test('Nebenstrasse beginnt direkt an der Route (keine Luecke) und endet am Korridorrand', () {
       final side = runs.last;
       expect(side.cls, 1);
-      expect(side.pts.first, greaterThanOrEqualTo(5));
-      expect(side.pts.first, lessThanOrEqualTo(40));
+      expect(side.pts.first, inInclusiveRange(-3, 3)); // Anschluss an die Route
+      expect(side.pts[1], closeTo(100, 3));
       expect(side.pts[side.pts.length - 2], greaterThan(200));
       expect(side.pts[side.pts.length - 2], lessThanOrEqualTo(265));
     });
 
+    test('Strasse, die nur ein Stueck auf der Route liegt, bleibt mit einem Anschlusspunkt', () {
+      // Beginnt auf der Route (y 0..60 liegt auf ihr), biegt dann nach Osten ab.
+      final t = RoadTile(
+          _z,
+          _tx,
+          _ty,
+          decodeMvtLines(
+              buildTile([
+                FixtureFeature('minor', [
+                  _line([[0, -60], [0, 60], [200, 60]])
+                ])
+              ]),
+              'transportation')!);
+      final out = const RoadExtractor().extract(
+        tiles: [t],
+        frame: _frame,
+        routeXs: const [0, 0],
+        routeYs: const [-300, 300],
+        vehicleX: 0,
+        vehicleY: 0,
+      );
+      expect(out.length, 1);
+      // Anfang ist der Anschluss an der Route, nicht erst 30 m weiter
+      expect(out.single.pts.first, inInclusiveRange(-3, 3));
+      expect(out.single.pts[1], closeTo(60, 40));
+    });
+
     test('Punktgrenze: Hauptstrassen bleiben, Rest wird abgeschnitten', () {
-      final few = const RoadExtractor(maxPoints: 4).extract(
+      final few = const RoadExtractor(maxPoints: 2).extract(
         tiles: [tile],
         frame: _frame,
         routeXs: const [0, 0],
@@ -130,7 +155,7 @@ void main() {
         vehicleY: 0,
       );
       expect(few.every((r) => r.cls == 2), isTrue);
-      expect(few.fold<int>(0, (a, r) => a + r.pointCount), lessThanOrEqualTo(4));
+      expect(few.fold<int>(0, (a, r) => a + r.pointCount), lessThanOrEqualTo(2));
     });
 
     test('lange Linien werden in Stuecke zu hoechstens maxRunPoints geteilt', () {

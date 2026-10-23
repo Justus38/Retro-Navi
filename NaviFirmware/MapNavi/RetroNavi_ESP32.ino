@@ -1,7 +1,7 @@
 /*
   Retro Navi - ESP32 Sketch (Stufe 1: Kartenansicht)
   Empfaengt die Navigationsdaten der App per Bluetooth (BLE) und zeigt sie
-  auf einem ILI9341-Display (320x240, Querformat) im Amber-auf-Schwarz-Stil an:
+  auf einem ILI9341-Display (320x240, Querformat) im Rot-auf-Schwarz-Stil (passend zur roten Instrumentenbeleuchtung) an:
 
     - MIT Kartendaten: Kartenausschnitt (Fahrtrichtung nach oben) mit dick
       gezeichneter Route, Fahrzeugsymbol, kleinem Abbiegesymbol samt Distanz
@@ -52,10 +52,18 @@
   Fehler zeigt (Rauschen, falsche Farben), TFT_SPI_HZ verkleinern, z. B. auf
   16000000. Geht es stabil, kann man auf 40000000 erhoehen.
 
+  Musik: Der A2DP-ESP32 schickt ueber die serielle Leitung (siehe MEDIA_*_PIN)
+  Zeilen {"t":"media","title":"..","artist":"..","album":"..","play":1,"con":1}.
+  Laeuft keine Navigation (seit NAV_IDLE_MS keine Daten), zeigt das Display
+  Titel, Interpret und Album (lange Texte laufen durch).
+  Verdrahtung: TX des A2DP-ESP32 -> MEDIA_RX_PIN, GND mit GND verbinden.
+  Beim S3 muss "USB CDC On Boot" aktiviert sein (sonst belegt der Monitor die Pins).
+
   Test ohne App (Seriellen Monitor, 115200 Baud):
     'd'  Demo durch alle Abbiegesymbole (Pfeil-Ansicht). Nochmal 'd' beendet.
     'm'  Demo-Fahrt auf einer eingebauten Strecke mit Kartenansicht.
          Nochmal 'm' beendet.
+
 */
 
 #include <Arduino.h>
@@ -80,6 +88,9 @@
 #define TFT_RESET 6        // D5
 #define TFT_LED 1          // D0 - Hintergrundbeleuchtung (PWM)
 #define BACKLIGHT_PIN TFT_LED
+// Serielle Verbindung zum A2DP-ESP32 (Musik-Metadaten). Seine TX-Leitung kommt an MEDIA_RX_PIN.
+#define MEDIA_RX_PIN 44    // D7
+#define MEDIA_TX_PIN 43    // D6 (nur falls der Navi-ESP etwas zurueckschicken soll)
 #else
 // Klassischer ESP32 (Pins wie in deinem Display-Testskript):
 #define TFT_MISO 25
@@ -90,8 +101,16 @@
 #define TFT_RESET 18
 #define TFT_CS 22
 #define BACKLIGHT_PIN 16   // wie in deinem Skript (PWM)
+#define MEDIA_RX_PIN 26
+#define MEDIA_TX_PIN 27
 #endif
+#define MEDIA_SERIAL Serial1
+#define MEDIA_BAUD 115200
+#define NAV_IDLE_MS 15000   // so lange keine Navigationsdaten mehr: Musik anzeigen
+#define MEDIA_ONLINE_MS 8000  // so lange darf der A2DP-ESP still sein
 #define BACKLIGHT_LEVEL 5  // 0-255, wie in deinem Skript; hoeher = heller
+#define TFT_ROTATION 3     // 1 oder 3 (Querformat); bei auf dem Kopf stehendem Bild umstellen
+#define TFT_INVERT 1       // 1 = Farben invertieren (noetig bei dem IPS-Display), 0 = normal
 #define TFT_SPI_HZ 27000000
 
 #define SCREEN_W 320
@@ -109,10 +128,10 @@ Adafruit_ILI9341 tft = Adafruit_ILI9341(&SPI, TFT_DC, TFT_CS, TFT_RESET);
 // ---------------------------------------------------------------- Farben
 // Direkte RGB565-Farben (Pfeil-Ansicht, Textbildschirme):
 #define COL_BG 0x0000
-#define COL_AMBER 0xFD20
-#define COL_DIM 0x8280
-#define COL_RED 0xF800
-#define COL_GREEN 0x07E0
+#define COL_AMBER 0xF900   // Hauptfarbe: Rot wie die Tachobeleuchtung (Name aus Altlast)
+#define COL_DIM 0x8000
+#define COL_RED 0xFB08     // Warnung: helleres Rot
+#define COL_GREEN 0xE0A0
 
 // Palette des Kartenpuffers (1 Byte pro Pixel = Index in diese Tabelle):
 #define PAL_BG 0
@@ -127,16 +146,16 @@ Adafruit_ILI9341 tft = Adafruit_ILI9341(&SPI, TFT_DC, TFT_CS, TFT_RESET);
 #define PAL_GREEN 9
 
 static const uint16_t PALETTE[16] = {
-  0x0000,  // PAL_BG
-  0x2945,  // PAL_SIDE
-  0x6B6D,  // PAL_MAIN
-  0x5200,  // PAL_PASSED
-  0xFD20,  // PAL_ROUTE
-  0xFFFF,  // PAL_CAR
-  0xFD20,  // PAL_TEXT
-  0x8280,  // PAL_DIM
-  0xF800,  // PAL_RED
-  0x07E0,  // PAL_GREEN
+  0x0000,  // PAL_BG      Schwarz
+  0x4000,  // PAL_SIDE    Nebenstrassen: sehr dunkles Rot
+  0x8000,  // PAL_MAIN    Hauptstrassen: mittleres Rot
+  0x3000,  // PAL_PASSED  gefahrene Strecke
+  0xF900,  // PAL_ROUTE   Route: helles Rot (wie die Tachobeleuchtung)
+  0xFB08,  // PAL_CAR     Fahrzeug: etwas heller, leicht orange
+  0xE0A0,  // PAL_TEXT
+  0x8000,  // PAL_DIM
+  0xFB08,  // PAL_RED     Warnung
+  0xE0A0,  // PAL_GREEN   (ungenutzt)
   0, 0, 0, 0, 0, 0
 };
 
@@ -155,7 +174,7 @@ static const uint16_t PALETTE[16] = {
 #define BAR_H 20            // Strassenname oben
 #define STRIP_Y 214         // Statusleiste unten
 #define ROUTE_W 7
-#define CASING_W 11
+#define CASING_W 9
 #define PASSED_W 3
 #define MAX_ROUTE_PTS 128
 #define MAX_RD_PTS 2600    // Punkte aller Nebenstrassen-Abschnitte
@@ -231,7 +250,7 @@ static portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
 static volatile bool clientConnected = false;
 
 // ------------------------------------------------------------- Zustand
-enum Screen { SCR_NONE, SCR_WAIT_CLIENT, SCR_WAIT_DATA, SCR_NAV, SCR_MAP };
+enum Screen { SCR_NONE, SCR_WAIT_CLIENT, SCR_WAIT_DATA, SCR_NAV, SCR_MAP, SCR_MEDIA };
 static Screen screen = SCR_NONE;
 static bool haveData = false;
 static bool stale = false;
@@ -608,17 +627,21 @@ static void strokeRoute(const View& v, int from, int to, bool hasStart, float sx
   if (hasEnd && havePrev) strokeWorld(v, px, py, ex, ey, w, color);
 }
 
-static void flushCanvas() {
+// Schickt Zeilen [y0, y0+h) des Kartenpuffers an das Display.
+static void flushRows(int y0, int h) {
   const uint8_t* src = canvas->getBuffer();
   tft.startWrite();
-  tft.setAddrWindow(0, 0, SCREEN_W, SCREEN_H);
-  for (int y = 0; y < SCREEN_H; y += 8) {
+  tft.setAddrWindow(0, y0, SCREEN_W, h);
+  for (int y = y0; y < y0 + h; y += 8) {
+    int rows = min(8, y0 + h - y);
     const uint8_t* row = src + (size_t)y * SCREEN_W;
-    for (int i = 0; i < SCREEN_W * 8; i++) flushBuf[i] = PALETTE[row[i] & 15];
-    tft.writePixels(flushBuf, SCREEN_W * 8);
+    for (int i = 0; i < SCREEN_W * rows; i++) flushBuf[i] = PALETTE[row[i] & 15];
+    tft.writePixels(flushBuf, SCREEN_W * rows);
   }
   tft.endWrite();
 }
+
+static void flushCanvas() { flushRows(0, SCREEN_H); }
 
 static void canvasText(int x, int y, uint8_t size, uint8_t color, const char* text) {
   canvas->setTextSize(size);
@@ -628,6 +651,180 @@ static void canvasText(int x, int y, uint8_t size, uint8_t color, const char* te
 }
 
 // Alle Abschnitte einer Klasse zeichnen.
+// ------------------------------------------------------------ Musik-Anzeige
+// Der A2DP-ESP32 schickt ueber die serielle Leitung je Zeile ein JSON-Objekt:
+//   {"t":"media","title":"...","artist":"...","album":"...","play":1,"con":1}
+//   play = 1 spielt / 0 pausiert, con = 1 wenn ein Handy verbunden ist.
+// Er wiederholt die Zeile alle paar Sekunden. Gezeigt wird sie, wenn keine
+// Navigation laeuft (keine Navigationsdaten seit NAV_IDLE_MS).
+struct MediaData {
+  char title[64];
+  char artist[64];
+  char album[64];
+  bool play;
+  bool phone;
+};
+static MediaData media;
+static bool mediaSeen = false;        // schon mindestens eine Zeile bekommen
+static bool mediaDirty = false;       // Inhalt hat sich geaendert -> neu zeichnen
+static bool mediaOnlineShown = true;
+static unsigned long mediaLastMs = 0;
+static unsigned long mediaChangeMs = 0;  // Start des Lauftexts
+static unsigned long mediaScrollMs = 0;
+static bool mediaScrolls = false;
+static char mediaLine[512];
+static size_t mediaLen = 0;
+static bool mediaOverflow = false;
+
+// UTF-8 -> reines ASCII (die Schrift kennt nur ASCII): Umlaute und Akzente
+// werden umgeschrieben, Unbekanntes faellt weg.
+static void asciiize(const char* in, char* out, size_t outSize) {
+  size_t o = 0;
+  auto put = [&](const char* t) {
+    while (*t && o + 1 < outSize) out[o++] = *t++;
+  };
+  for (const uint8_t* p = (const uint8_t*)in; *p; p++) {
+    uint8_t c = *p;
+    if (c >= 0x20 && c < 0x7F) {
+      if (o + 1 < outSize) out[o++] = (char)c;
+    } else if (c == 0xC3 && p[1]) {
+      uint8_t d = *++p;
+      switch (d) {
+        case 0x84: put("Ae"); break;
+        case 0x96: put("Oe"); break;
+        case 0x9C: put("Ue"); break;
+        case 0xA4: put("ae"); break;
+        case 0xB6: put("oe"); break;
+        case 0xBC: put("ue"); break;
+        case 0x9F: put("ss"); break;
+        case 0xA0: case 0xA1: case 0xA2: case 0xA3: case 0xA5: put("a"); break;
+        case 0xA7: put("c"); break;
+        case 0xA8: case 0xA9: case 0xAA: case 0xAB: put("e"); break;
+        case 0xAC: case 0xAD: case 0xAE: case 0xAF: put("i"); break;
+        case 0xB1: put("n"); break;
+        case 0xB2: case 0xB3: case 0xB4: case 0xB5: case 0xB8: put("o"); break;
+        case 0xB9: case 0xBA: case 0xBB: put("u"); break;
+        case 0x80: case 0x81: case 0x82: case 0x83: case 0x85: put("A"); break;
+        case 0x87: put("C"); break;
+        case 0x88: case 0x89: case 0x8A: case 0x8B: put("E"); break;
+        case 0x92: case 0x93: case 0x94: case 0x95: put("O"); break;
+        default: break;
+      }
+    } else if (c == 0xE2 && p[1] == 0x80 && p[2]) {
+      uint8_t d = p[2];
+      p += 2;
+      if (d == 0x98 || d == 0x99) put("'");
+      else if (d == 0x9C || d == 0x9D) put("\"");
+      else if (d == 0x93 || d == 0x94) put("-");
+      else if (d == 0xA6) put("...");
+    } else if (c >= 0xC0) {
+      // andere Mehrbyte-Zeichen: Folgebytes ueberspringen
+      while ((p[1] & 0xC0) == 0x80) p++;
+    }
+  }
+  out[o] = 0;
+}
+
+static void handleMediaLine(const char* line) {
+  JsonDocument doc;
+  if (deserializeJson(doc, line)) return;
+  if (strcmp(doc["t"] | "", "media") != 0) return;
+  MediaData m;
+  asciiize(doc["title"] | "", m.title, sizeof(m.title));
+  asciiize(doc["artist"] | "", m.artist, sizeof(m.artist));
+  asciiize(doc["album"] | "", m.album, sizeof(m.album));
+  m.play = (doc["play"] | 0) != 0;
+  m.phone = (doc["con"] | 1) != 0;
+  bool textChanged = strcmp(m.title, media.title) || strcmp(m.artist, media.artist) ||
+                     strcmp(m.album, media.album);
+  if (!mediaSeen || textChanged || m.play != media.play || m.phone != media.phone) mediaDirty = true;
+  if (!mediaSeen || textChanged) mediaChangeMs = millis();
+  media = m;
+  mediaSeen = true;
+  mediaLastMs = millis();
+}
+
+// Zeilen von der seriellen Leitung einsammeln (Zeilenende = '\n').
+static void pollMediaSerial() {
+  while (MEDIA_SERIAL.available()) {
+    char c = (char)MEDIA_SERIAL.read();
+    if (c == '\n') {
+      mediaLine[mediaLen] = 0;
+      if (mediaLen > 0 && !mediaOverflow) handleMediaLine(mediaLine);
+      mediaLen = 0;
+      mediaOverflow = false;
+    } else if (c != '\r') {
+      if (mediaLen < sizeof(mediaLine) - 1) mediaLine[mediaLen++] = c;
+      else mediaOverflow = true;
+    }
+  }
+}
+
+#define MEDIA_TXT_Y 52     // Textblock (wird beim Laufen einzeln aufgefrischt)
+#define MEDIA_TXT_H 124
+
+// Eine Textzeile: passt sie, zentriert; sonst als Lauftext (Pause am Anfang).
+static void mediaRow(const char* text, int y, uint8_t size, uint8_t color) {
+  int w = (int)strlen(text) * 6 * size;
+  canvas->setTextWrap(false);  // sonst bricht langer Text in die naechste Zeile um
+  canvas->setTextSize(size);
+  canvas->setTextColor(color);
+  if (w <= SCREEN_W - 8) {
+    canvas->setCursor((SCREEN_W - w) / 2, y);
+    canvas->print(text);
+    return;
+  }
+  const int gap = 48;
+  long t = (long)(millis() - mediaChangeMs) - 1500;  // 1,5 s stehen bleiben
+  long off = t > 0 ? (t * 45 / 1000) % (w + gap) : 0;  // 45 Pixel pro Sekunde
+  canvas->setCursor(4 - (int)off, y);
+  canvas->print(text);
+  canvas->setCursor(4 - (int)off + w + gap, y);
+  canvas->print(text);
+  mediaScrolls = true;
+}
+
+static void drawMedia(bool full) {
+  screen = SCR_MEDIA;
+  mediaScrolls = false;
+  bool online = mediaSeen && (millis() - mediaLastMs) < MEDIA_ONLINE_MS;
+  mediaOnlineShown = online;
+
+  canvas->fillScreen(PAL_BG);
+
+  // Kopfzeile
+  canvasText(6, 4, 2, PAL_DIM, "BLUETOOTH");
+  if (online && media.phone) {
+    if (media.play) {
+      canvas->fillTriangle(296, 4, 296, 20, 310, 12, PAL_ROUTE);
+    } else {
+      canvas->fillRect(296, 4, 5, 16, PAL_ROUTE);
+      canvas->fillRect(305, 4, 5, 16, PAL_ROUTE);
+    }
+  }
+  canvas->drawFastHLine(0, 24, SCREEN_W, PAL_DIM);
+
+  // Text
+  if (online && media.phone && (media.title[0] || media.artist[0])) {
+    mediaRow(media.title, MEDIA_TXT_Y + 8, 3, PAL_ROUTE);
+    mediaRow(media.artist, MEDIA_TXT_Y + 64, 2, PAL_TEXT);
+    mediaRow(media.album, MEDIA_TXT_Y + 96, 2, PAL_DIM);
+  } else {
+    const char* msg = !online ? "Kein Audio-Modul" : (!media.phone ? "Kein Handy verbunden" : "Warte auf Musik ...");
+    int w = (int)strlen(msg) * 12;
+    canvasText((SCREEN_W - w) / 2, MEDIA_TXT_Y + 40, 2, PAL_DIM, msg);
+  }
+
+  // Fusszeile
+  canvas->drawFastHLine(0, STRIP_Y, SCREEN_W, PAL_DIM);
+  const char* st = !online ? "KEINE VERBINDUNG" : (!media.phone ? "KEIN HANDY" : (media.play ? "WIEDERGABE" : "PAUSE"));
+  int sw = (int)strlen(st) * 12;
+  canvasText((SCREEN_W - sw) / 2, STRIP_Y + 8, 2, PAL_TEXT, st);
+
+  if (full) flushCanvas();
+  else flushRows(MEDIA_TXT_Y, MEDIA_TXT_H);
+}
+
 static void drawRoads(const View& v, uint8_t cls, int w, uint8_t color) {
   const RoadSet& r = *rdActive;
   for (int k = 0; k < r.runs; k++) {
@@ -1124,7 +1321,8 @@ void setup() {
   // wird. Kein SS-Pin: den schaltet die Adafruit-Bibliothek selbst.
   SPI.begin(TFT_SCK, TFT_MISO, TFT_MOSI, -1);
   tft.begin(TFT_SPI_HZ);
-  tft.setRotation(3);
+  tft.setRotation(TFT_ROTATION);
+  tft.invertDisplay(TFT_INVERT);
   tft.fillScreen(COL_BG);
   setBacklight(BACKLIGHT_LEVEL);
 
@@ -1136,6 +1334,9 @@ void setup() {
   } else {
     Serial.printf("Kartenpuffer ok. Freier Speicher: %u Byte\n", (unsigned)ESP.getFreeHeap());
   }
+
+  MEDIA_SERIAL.setRxBufferSize(1024);  // Zeilen bis ~300 Byte, waehrend das Display zeichnet
+  MEDIA_SERIAL.begin(MEDIA_BAUD, SERIAL_8N1, MEDIA_RX_PIN, MEDIA_TX_PIN);
 
   lastPose.valid = false;
   resetShown();
@@ -1166,6 +1367,8 @@ void loop() {
     portEXIT_CRITICAL(&mux);
   }
 
+  pollMediaSerial();
+
   const bool connected = clientConnected || demoActive || mapDemoActive;
 
   if (!connected) {
@@ -1175,6 +1378,23 @@ void loop() {
     chunkFrame = 0;
     rdShow = false;
     lastPose.valid = false;
+  }
+
+  // Navigation laeuft = es kamen vor kurzem Navigationsdaten.
+  const bool navActive = connected && haveData && (millis() - lastMsgMs) <= NAV_IDLE_MS;
+  const bool showMedia = canvas != nullptr && mediaSeen && !navActive;
+
+  if (showMedia) {
+    bool online = (millis() - mediaLastMs) < MEDIA_ONLINE_MS;
+    if (screen != SCR_MEDIA || mediaDirty || online != mediaOnlineShown) {
+      mediaDirty = false;
+      drawMedia(true);
+      mediaScrollMs = millis();
+    } else if (mediaScrolls && millis() - mediaScrollMs >= 100) {
+      mediaScrollMs = millis();
+      drawMedia(false);
+    }
+  } else if (!connected) {
     if (screen != SCR_WAIT_CLIENT) switchScreen(SCR_WAIT_CLIENT);
   } else if (!haveData) {
     if (screen != SCR_WAIT_DATA) switchScreen(SCR_WAIT_DATA);
@@ -1184,6 +1404,9 @@ void loop() {
       stale = nowStale;
       renderCurrent();
     }
+  } else if (screen == SCR_MEDIA && lastDataValid) {
+    // zurueck zur Navigation (neue Navigationsdaten sind da)
+    renderCurrent();
   }
   delay(5);
 }
