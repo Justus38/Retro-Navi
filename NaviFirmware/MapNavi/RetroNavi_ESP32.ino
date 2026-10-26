@@ -81,7 +81,7 @@
 #if defined(CONFIG_IDF_TARGET_ESP32S3)
 // Seeed XIAO ESP32S3 (Beschriftung auf der Platine in Klammern):
 #define TFT_SCK 7          // D8
-#define TFT_MISO 8         // D9  (nur angeschlossen, der Sketch liest nichts vom Display)
+#define TFT_MISO -1        // nicht angeschlossen (D9 ist jetzt Drehgeber B); der Sketch liest nichts vom Display
 #define TFT_MOSI 9         // D10
 #define TFT_DC 4           // D3
 #define TFT_CS 5           // D4
@@ -90,7 +90,11 @@
 #define BACKLIGHT_PIN TFT_LED
 // Serielle Verbindung zum A2DP-ESP32 (Musik-Metadaten). Seine TX-Leitung kommt an MEDIA_RX_PIN.
 #define MEDIA_RX_PIN 44    // D7
-#define MEDIA_TX_PIN 43    // D6 (nur falls der Navi-ESP etwas zurueckschicken soll)
+#define MEDIA_TX_PIN -1    // kein Rueckkanal (D6 ist frei fuer den Taster)
+// Drehgeber fuer den Zoom (EC11): Mittelpin an GND, A und B an diese Pins, Taster optional.
+#define ENC_ZOOM_A 2       // D1
+#define ENC_ZOOM_B 8       // D9
+#define ENC_ZOOM_SW -1     // z. B. 43 (D6): Druck = zurueck auf Automatik; -1 = nicht angeschlossen
 #else
 // Klassischer ESP32 (Pins wie in deinem Display-Testskript):
 #define TFT_MISO 25
@@ -103,7 +107,15 @@
 #define BACKLIGHT_PIN 16   // wie in deinem Skript (PWM)
 #define MEDIA_RX_PIN 26
 #define MEDIA_TX_PIN 27
+#define ENC_ZOOM_A -1      // Zoom-Drehgeber nur am XIAO eingerichtet
+#define ENC_ZOOM_B -1
+#define ENC_ZOOM_SW -1
 #endif
+#define ENC_STEPS_PER_DETENT 4   // 4 bei den meisten EC11, 2 bei manchen
+#define ENC_REVERSE 0            // 1 = Drehrichtung tauschen (rechts = hineinzoomen)
+#define ZOOM_STEP_FACTOR 1.35f   // Faktor pro Rastung
+#define ZOOM_MAX_STEPS 4         // so viele Rastungen rein bzw. raus
+#define ZOOM_HOLD_MS 20000       // danach wieder Automatik
 #define MEDIA_SERIAL Serial1
 #define MEDIA_BAUD 115200
 #define NAV_IDLE_MS 15000   // so lange keine Navigationsdaten mehr: Musik anzeigen
@@ -836,6 +848,26 @@ static void drawMedia(bool full) {
   else flushRows(MEDIA_TXT_Y, MEDIA_TXT_H);
 }
 
+// ------------------------------------------------------------ Zoom-Drehgeber
+// Drehen zoomt auf der Karte rein/raus (zusaetzlich zur automatischen Sichtweite),
+// nach ZOOM_HOLD_MS ohne Drehen oder mit Tasterdruck zurueck auf Automatik.
+static int zoomStep = 0;                 // + = hinein, - = heraus
+static unsigned long zoomChangedMs = 0;
+static unsigned long zoomLabelUntil = 0;
+#if ENC_ZOOM_A >= 0
+static volatile int32_t zoomEncCount = 0;
+static volatile uint8_t zoomEncState = 0;
+static const int8_t ZOOM_ENC_TABLE[16] = {0, -1, 1, 0, 1, 0, 0, -1, -1, 0, 0, 1, 0, 1, -1, 0};
+
+void IRAM_ATTR zoomEncoderISR() {
+  uint8_t st = (digitalRead(ENC_ZOOM_A) << 1) | digitalRead(ENC_ZOOM_B);
+  zoomEncCount += ZOOM_ENC_TABLE[(zoomEncState << 2) | st];
+  zoomEncState = st;
+}
+#endif
+
+static float zoomFactor() { return powf(ZOOM_STEP_FACTOR, -(float)zoomStep); }
+
 static void drawRoads(const View& v, uint8_t cls, int w, uint8_t color) {
   const RoadSet& r = *rdActive;
   for (int k = 0; k < r.runs; k++) {
@@ -851,6 +883,7 @@ static void drawMap(const NavData& d, const PoseData& p) {
 
   // ---- Karte
   float z = p.z > 20 ? (float)p.z : 300.0f;
+  z = constrain(z * zoomFactor(), 40.0f, 4000.0f);
   View v;
   float hr = p.h * (float)M_PI / 180.0f;
   v.sinH = sinf(hr);
@@ -908,6 +941,15 @@ static void drawMap(const NavData& d, const PoseData& p) {
     canvas->drawFastHLine(PANEL_W, BAR_H, SCREEN_W - PANEL_W, PAL_DIM);
     if (stale) canvasText(PANEL_W + 6, 3, 2, PAL_RED, "KEIN SIGNAL");
     else canvasText(PANEL_W + 6, 3, 2, PAL_TEXT, d.street);
+  }
+
+  // ---- Zoom-Anzeige (kurz nach dem Drehen): Sichtweite nach vorn
+  if (millis() < zoomLabelUntil) {
+    formatDistance((long)z, buf, sizeof(buf));
+    int lw = strlen(buf) * 12 + 8;
+    canvas->fillRect(SCREEN_W - lw - 2, BAR_H + 4, lw, 20, PAL_BG);
+    canvas->drawRect(SCREEN_W - lw - 2, BAR_H + 4, lw, 20, PAL_DIM);
+    canvasText(SCREEN_W - lw + 2, BAR_H + 7, 2, PAL_TEXT, buf);
   }
 
   // ---- Statusleiste unten
@@ -1346,6 +1388,16 @@ void setup() {
     Serial.printf("Kartenpuffer ok. Freier Speicher: %u Byte\n", (unsigned)ESP.getFreeHeap());
   }
 
+#if ENC_ZOOM_A >= 0
+  pinMode(ENC_ZOOM_A, INPUT_PULLUP);
+  pinMode(ENC_ZOOM_B, INPUT_PULLUP);
+#if ENC_ZOOM_SW >= 0
+  pinMode(ENC_ZOOM_SW, INPUT_PULLUP);
+#endif
+  zoomEncState = (digitalRead(ENC_ZOOM_A) << 1) | digitalRead(ENC_ZOOM_B);
+  attachInterrupt(digitalPinToInterrupt(ENC_ZOOM_A), zoomEncoderISR, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(ENC_ZOOM_B), zoomEncoderISR, CHANGE);
+#endif
   MEDIA_SERIAL.setRxBufferSize(1024);  // Zeilen bis ~300 Byte, waehrend das Display zeichnet
   MEDIA_SERIAL.begin(MEDIA_BAUD, SERIAL_8N1, MEDIA_RX_PIN, MEDIA_TX_PIN);
 
@@ -1357,8 +1409,49 @@ void setup() {
   switchScreen(SCR_WAIT_CLIENT);
 }
 
+// Drehgeber auswerten und Karte neu zeichnen, wenn sich der Zoom aendert.
+static void pollZoomEncoder() {
+#if ENC_ZOOM_A >= 0
+  noInterrupts();
+  int32_t c = zoomEncCount;
+  int32_t steps = c / ENC_STEPS_PER_DETENT;
+  zoomEncCount = c - steps * ENC_STEPS_PER_DETENT;
+  interrupts();
+  if (ENC_REVERSE) steps = -steps;
+
+  static bool lastDown = false;
+  bool pressed = false;
+#if ENC_ZOOM_SW >= 0
+  bool down = digitalRead(ENC_ZOOM_SW) == LOW;
+  pressed = down && !lastDown;
+  lastDown = down;
+#endif
+
+  bool changed = false;
+  if (steps != 0) {
+    zoomStep = constrain(zoomStep + (int)steps, -ZOOM_MAX_STEPS, ZOOM_MAX_STEPS);
+    zoomChangedMs = millis();
+    changed = true;
+  } else if (pressed && zoomStep != 0) {
+    zoomStep = 0;
+    changed = true;
+  } else if (zoomStep != 0 && millis() - zoomChangedMs > ZOOM_HOLD_MS) {
+    zoomStep = 0;  // zurueck auf Automatik
+    changed = true;
+  }
+  if (changed) {
+    zoomLabelUntil = millis() + 1500;
+    if (screen == SCR_MAP && lastDataValid) renderCurrent();
+  } else if (zoomLabelUntil != 0 && millis() > zoomLabelUntil) {
+    zoomLabelUntil = 0;  // Anzeige wieder ausblenden
+    if (screen == SCR_MAP && lastDataValid) renderCurrent();
+  }
+#endif
+}
+
 void loop() {
   handleSerial();
+  pollZoomEncoder();
 
   if (demoActive && millis() >= demoNextMs) {
     handleLine(DEMO[demoIndex]);
